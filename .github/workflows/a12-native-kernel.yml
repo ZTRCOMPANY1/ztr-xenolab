@@ -21,6 +21,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             bc bison build-essential flex git \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
             libelf-dev libssl-dev libncurses-dev \
             python3 device-tree-compiler dwarves \
             clang llvm lld
@@ -70,9 +71,7 @@ jobs:
         run: |
           set -eux
           make O=out ARCH=arm64 \
-            CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm \
-            OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
+            LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- AS=clang \
             KCFLAGS="-w -Wno-error=int-conversion -Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types" \
             -j2 Image dtbs
 
