@@ -1,0 +1,103 @@
+name: A12 native Linux kernel build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/a12-native-kernel.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-a12-mt6765:
+    name: Build SM-A125M MT6765 kernel
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc bison build-essential flex git \
+            libelf-dev libssl-dev libncurses-dev \
+            python3 device-tree-compiler dwarves \
+            clang llvm lld
+
+      - name: Fetch pinned A12 kernel source
+        run: |
+          git clone https://github.com/CaioBM1/android_kernel_samsung_a125m.git kernel
+          git -C kernel checkout 27dcfae507b0c1a2ffc7441f7611a60b7e96f88a
+          git -C kernel rev-parse HEAD
+
+      - name: Configure kernel for native Linux userspace
+        working-directory: kernel
+        run: |
+          make O=out ARCH=arm64 CC=clang a12_defconfig
+          scripts/kconfig/merge_config.sh -m -O out out/.config arch/arm64/configs/halium.config
+          make O=out ARCH=arm64 CC=clang olddefconfig
+
+          set -eux
+          for option in \
+            CONFIG_DEVTMPFS \
+            CONFIG_FHANDLE \
+            CONFIG_SYSVIPC \
+            CONFIG_IPC_NS \
+            CONFIG_NET_NS \
+            CONFIG_PID_NS \
+            CONFIG_USER_NS \
+            CONFIG_UTS_NS \
+            CONFIG_VT \
+            CONFIG_BLK_DEV_INITRD \
+            CONFIG_MMC \
+            CONFIG_MMC_BLOCK \
+            CONFIG_MMC_MTK_PRO \
+            CONFIG_EXT4_FS \
+            CONFIG_FAT_FS \
+            CONFIG_VFAT_FS \
+            CONFIG_USB_GADGET \
+            CONFIG_USB_F_ACM \
+            CONFIG_USB_CONFIGFS \
+            CONFIG_USB_CONFIGFS_ACM \
+            CONFIG_CONFIGFS_FS; do
+            grep -q "^${option}=y$" out/.config || { echo "Required option missing: ${option}"; exit 1; }
+          done
+          grep -E '^CONFIG_(DEVTMPFS|FHANDLE|SYSVIPC|IPC_NS|NET_NS|PID_NS|USER_NS|UTS_NS|VT|BLK_DEV_INITRD|MMC|MMC_BLOCK|MMC_MTK_PRO|EXT4_FS|FAT_FS|VFAT_FS|USB_GADGET|USB_F_ACM|USB_CONFIGFS|USB_CONFIGFS_ACM|CONFIGFS_FS)=y$' out/.config
+
+      - name: Compile Image and device trees
+        working-directory: kernel
+        run: |
+          set -eux
+          make O=out ARCH=arm64 \
+            CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm \
+            OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            KCFLAGS="-w -Wno-error=int-conversion -Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types" \
+            -j2 Image dtbs
+
+          test -s out/arch/arm64/boot/Image
+          test -s out/arch/arm64/boot/dts/mediatek/mt6765.dtb
+          mkdir -p ../release
+          cp out/arch/arm64/boot/Image ../release/Image
+          cp out/arch/arm64/boot/dts/mediatek/mt6765.dtb ../release/mt6765.dtb
+          cp out/.config ../release/kernel.config
+          cp out/System.map ../release/System.map
+          {
+            echo "source_repo=https://github.com/CaioBM1/android_kernel_samsung_a125m"
+            echo "source_commit=$(git rev-parse HEAD)"
+            echo "kernel_version=$(make -s O=out ARCH=arm64 kernelversion)"
+            echo "clang_version=$(clang --version | head -n 1)"
+            echo "target=Samsung Galaxy A12 SM-A125M / MediaTek MT6765"
+            echo "config=a12_defconfig + arch/arm64/configs/halium.config"
+            echo "device_tree=mt6765.dtb"
+          } > ../release/BUILD-MANIFEST.txt
+          sha256sum ../release/* > ../release/SHA256SUMS.txt
+
+      - name: Upload kernel build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: a12-native-linux-kernel-mt6765
+          path: release/
+          if-no-files-found: error
+          retention-days: 14
